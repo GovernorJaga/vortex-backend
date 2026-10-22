@@ -48,8 +48,26 @@ export class BullMqJobQueueDriver implements JobQueueDriver {
       ...this.jobOptions(def),
       jobId: opts.idempotencyKey,
       delay: opts.delayMs,
+      priority: opts.priority,
     });
     return job.id as string;
+  }
+
+  async cancel(queue: string, jobId: string): Promise<boolean> {
+    const { queue: source } = this.entry(queue);
+    const job = await source.getJob(jobId);
+    if (!job) return false;
+    // Only pending/delayed/prioritized jobs are cancellable; an active job is
+    // left to finish (cancellation is not preemptive mid-execution).
+    const state = await job.getState();
+    if (state === "active" || state === "completed" || state === "failed") return false;
+    try {
+      await job.remove();
+      return true;
+    } catch (err) {
+      this.logger.warn(`[jobs] ${queue}: failed to cancel job ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
   }
 
   async schedule<T>(def: JobDefinition<T>, everyMs: number, data: T): Promise<void> {
